@@ -16,7 +16,7 @@ export type ActivityStoreWrite = {
 };
 
 export async function readActivityCsv(): Promise<ActivityStoreRead> {
-  if (hasBlobToken()) {
+  if (hasBlobAccess()) {
     const blobCsv = await readActivityCsvFromBlob();
 
     if (blobCsv !== null) {
@@ -43,7 +43,7 @@ export async function readActivityCsv(): Promise<ActivityStoreRead> {
 }
 
 export async function writeActivityCsv(csv: string): Promise<ActivityStoreWrite> {
-  if (hasBlobToken()) {
+  if (hasBlobAccess()) {
     const blob = await put(ACTIVITY_BLOB_PATHNAME, csv, {
       access: getBlobAccess(),
       allowOverwrite: true,
@@ -86,8 +86,12 @@ async function readActivityCsvFromBlob() {
   }
 }
 
-function hasBlobToken() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+function hasBlobAccess() {
+  return Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN ||
+      process.env.VERCEL_OIDC_TOKEN ||
+      (process.env.VERCEL && process.env.BLOB_STORE_ID)
+  );
 }
 
 function getBlobAccess(): BlobAccessType {
