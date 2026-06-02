@@ -68,7 +68,7 @@ export function Footer() {
         <div className="-translate-y-[2px] flex flex-col gap-1">
           <span className="font-mono text-[12px] leading-none text-muted-foreground/60">brick by brick</span>
           <a
-            href="https://www.strava.com/athletes/46854365"
+            href="https://miguel-leca.com"
             target="_blank"
             rel="noopener noreferrer"
             className="pointer-events-auto font-mono text-[12px] leading-none text-muted-foreground/60 transition-colors duration-200 hover:text-accent"
