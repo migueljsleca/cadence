@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { get, put, BlobNotFoundError, type BlobAccessType } from "@vercel/blob";
+import { get, put, BlobError, BlobNotFoundError, type BlobAccessType } from "@vercel/blob";
 import { getActivityCsvPath } from "@/lib/activity-csv";
 
 export const ACTIVITY_BLOB_PATHNAME = "activities.csv";
@@ -49,6 +49,7 @@ export async function writeActivityCsv(csv: string): Promise<ActivityStoreWrite>
       allowOverwrite: true,
       contentType: "text/csv; charset=utf-8",
       cacheControlMaxAge: 60,
+      token: getBlobToken(),
     });
 
     return {
@@ -70,6 +71,7 @@ async function readActivityCsvFromBlob() {
     const result = await get(ACTIVITY_BLOB_PATHNAME, {
       access: getBlobAccess(),
       useCache: false,
+      token: getBlobToken(),
     });
 
     if (!result || result.statusCode !== 200 || !result.stream) {
@@ -78,12 +80,16 @@ async function readActivityCsvFromBlob() {
 
     return new Response(result.stream).text();
   } catch (error) {
-    if (error instanceof BlobNotFoundError) {
+    if (error instanceof BlobNotFoundError || isBlobReadAuthError(error)) {
       return null;
     }
 
     throw error;
   }
+}
+
+function isBlobReadAuthError(error: unknown) {
+  return error instanceof BlobError && /Failed to fetch blob: (401|403)\b/.test(error.message);
 }
 
 function hasBlobAccess() {
@@ -96,4 +102,8 @@ function hasBlobAccess() {
 
 function getBlobAccess(): BlobAccessType {
   return process.env.ACTIVITY_BLOB_ACCESS === "public" ? "public" : "private";
+}
+
+function getBlobToken() {
+  return process.env.BLOB_READ_WRITE_TOKEN;
 }
