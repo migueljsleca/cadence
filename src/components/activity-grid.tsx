@@ -10,7 +10,6 @@ import {
   type FocusEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X } from "lucide-react";
 import { motion } from "motion/react";
 import type { ActivityCell } from "@/lib/activities";
 import { cn } from "@/lib/utils";
@@ -73,6 +72,8 @@ type ActivityTotals = {
   runSeconds: number;
   rideSeconds: number;
   elevationGainMeters: number;
+  activities: number;
+  activeDays: number;
 };
 
 type MonthMarker = {
@@ -83,14 +84,30 @@ type MonthMarker = {
 };
 
 const dayLabels = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const weeklyBarStrokeWidth = 2;
+const weeklyBarWidth = 2;
 const timelineStartThreshold = 24;
-const weeklyGuideHours = [5, 10, 15, 20];
 const monthLabelWeekGap = 8;
 const heroCellSize = 18;
 const heroCellGap = 4;
 const activityGridHeight = dayLabels.length * heroCellSize + (dayLabels.length - 1) * heroCellGap;
 const weeklyBarHeight = activityGridHeight;
+const weeklyPlotTopPadding = 12;
+const weeklyPlotHeight = weeklyBarHeight - weeklyPlotTopPadding;
+const weeklyGuideFractions = [0, 0.25, 0.5, 0.75, 1];
+
+function getWeeklyScaleSeconds(maxSeconds: number) {
+  const hoursPerGuide = Math.max(1, Math.ceil(maxSeconds / (4 * 3600)));
+  return hoursPerGuide * 4 * 3600;
+}
+
+function getWeeklyBarHeight(totalSeconds: number, maxSeconds: number) {
+  if (totalSeconds <= 0 || maxSeconds <= 0) return 0;
+  return Math.min(Math.max((totalSeconds / maxSeconds) * weeklyPlotHeight, 8), weeklyPlotHeight);
+}
+
+function formatGuideHours(seconds: number) {
+  return `${Math.round(seconds / 3600).toLocaleString("en")}h`;
+}
 
 function getRandomCellStaggerDelay(cell: ActivityCell, animationKey: string) {
   return hashStringToUnit(`${animationKey}:delay:${cell.date}:${cell.weekIndex}:${cell.dayIndex}`) * 0.8;
@@ -128,6 +145,9 @@ const GridCellButton = memo(function GridCellButton({
   animateOnMount,
   onSelect,
 }: GridCellButtonProps) {
+  const hasRun = cell.runSeconds > 0;
+  const hasRide = cell.rideSeconds > 0;
+
   return (
     <motion.button
       type="button"
@@ -136,7 +156,10 @@ const GridCellButton = memo(function GridCellButton({
         cell.movingTimeSeconds === 0 && "opacity-75"
       )}
       style={{
-        backgroundColor: `var(--activity-${cell.intensity})`,
+        backgroundColor: hasRide && !hasRun ? `var(--ride-${cell.intensity})` : `var(--activity-${cell.intensity})`,
+        backgroundImage: hasRun && hasRide
+          ? `linear-gradient(135deg, var(--activity-${cell.intensity}) 0 50%, var(--ride-${cell.intensity}) 50% 100%)`
+          : undefined,
         gridColumn: cell.weekIndex + 1,
         gridRow: cell.dayIndex + 1,
       }}
@@ -176,8 +199,11 @@ export function ActivityTimelineViewport({ cells }: ActivityTimelineViewportProp
   );
   const newestFirstCells = useMemo(() => reverseWeekOrder(displayCells), [displayCells]);
   const weeklyTotals = useMemo(() => buildWeeklyTotals(newestFirstCells), [newestFirstCells]);
+  const weeklyRangeScaleSeconds = useMemo(
+    () => getWeeklyScaleSeconds(weeklyTotals.reduce((max, week) => Math.max(max, week.totalSeconds), 0)),
+    [weeklyTotals]
+  );
   const activityTotals = useMemo(() => buildActivityTotals(rangeActivityCells), [rangeActivityCells]);
-  const visibleWeeklyGuides = weeklyGuideHours;
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -286,13 +312,13 @@ export function ActivityTimelineViewport({ cells }: ActivityTimelineViewportProp
           selectedLabel={selectedRangeLabel}
           onSelect={setSelectedRangeLabel}
         />
-        <dl className="mt-5 flex gap-8 text-[14px]">
+        <dl className="mt-5 flex flex-wrap gap-x-8 gap-y-4 text-[14px]">
           <div>
-            <dt className="text-muted-foreground/70">run</dt>
+            <dt className="flex items-center gap-1.5 text-muted-foreground/70"><span className="size-2 shrink-0 rounded-[1px] bg-[var(--run)]" aria-hidden="true" />run</dt>
             <dd className="mt-1 text-foreground">{formatTotalHours(activityTotals.runSeconds)}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground/70">ride</dt>
+            <dt className="flex items-center gap-1.5 text-muted-foreground/70"><span className="size-2 shrink-0 rounded-[1px] bg-[var(--ride)]" aria-hidden="true" />ride</dt>
             <dd className="mt-1 text-foreground">{formatTotalHours(activityTotals.rideSeconds)}</dd>
           </div>
           <div>
@@ -300,6 +326,14 @@ export function ActivityTimelineViewport({ cells }: ActivityTimelineViewportProp
             <dd className="mt-1 text-foreground">
               {formatElevation(activityTotals.elevationGainMeters)}
             </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground/70">activities</dt>
+            <dd className="mt-1 text-foreground">{activityTotals.activities.toLocaleString("en")}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground/70">active days</dt>
+            <dd className="mt-1 text-foreground">{activityTotals.activeDays.toLocaleString("en")}</dd>
           </div>
         </dl>
       </div>
@@ -321,15 +355,16 @@ export function ActivityTimelineViewport({ cells }: ActivityTimelineViewportProp
                 {day}
               </div>
             ))}
-            {visibleWeeklyGuides.map((hours) => (
+            {weeklyGuideFractions.map((fraction) => (
               <span
-                key={hours}
+                key={fraction}
+                data-weekly-guide-label
                 className="pointer-events-none absolute left-0 z-10 -translate-y-1/2 font-mono text-[12px] leading-none text-muted-foreground/70"
                 style={{
-                  top: activityGridHeight + 12 + (hours / 20) * weeklyBarHeight,
+                  top: activityGridHeight + 12 + weeklyBarHeight - fraction * weeklyPlotHeight,
                 }}
               >
-                {hours}h
+                {formatGuideHours(weeklyRangeScaleSeconds * fraction)}
               </span>
             ))}
           </div>
@@ -346,7 +381,12 @@ export function ActivityTimelineViewport({ cells }: ActivityTimelineViewportProp
               animateCellsOnMount
               size="hero"
             />
-            <WeeklyTotalBars weeks={weeklyTotals} animateOnMount />
+            <WeeklyTotalBars
+              weeks={weeklyTotals}
+              rangeScaleSeconds={weeklyRangeScaleSeconds}
+              animateOnMount
+              scaleToViewport={selectedRangeLabel === "all time"}
+            />
           </motion.div>
         </div>
       </div>
@@ -363,75 +403,24 @@ function DateRangeFilter({
   selectedLabel: DateRangeOption["label"];
   onSelect: (label: DateRangeOption["label"]) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const selectedOption = options.find((option) => option.label === selectedLabel) ?? options[0];
-  const availableOptions = options.filter((option) => option.label !== selectedLabel);
-  const [visibleOptions, setVisibleOptions] = useState(availableOptions);
-
-  const handleSelect = (label: DateRangeOption["label"]) => {
-    if (label === selectedLabel) {
-      if (!isExpanded) {
-        setVisibleOptions(availableOptions);
-      }
-
-      setIsExpanded((current) => !current);
-      return;
-    }
-
-    setIsExpanded(false);
-    onSelect(label);
-  };
-
-  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget)) {
-      setIsExpanded(false);
-    }
-  };
-
   return (
-    <div className="mt-5 font-mono text-[14px] leading-none" onBlur={handleBlur}>
+    <div className="mt-5 font-mono text-[14px] leading-none">
       <div className="text-muted-foreground/70">date range</div>
-      <div className="mt-1 flex min-h-4 flex-wrap items-center overflow-visible" aria-label="Date range">
-        <button
-          type="button"
-          className="group inline-flex items-center gap-2 whitespace-nowrap text-foreground transition-colors duration-150 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-          aria-pressed="true"
-          aria-expanded={isExpanded}
-          onClick={() => handleSelect(selectedOption.label)}
-        >
-          <span>{selectedOption.label}</span>
-          <span
+      <div className="mt-1 flex min-h-4 flex-wrap items-center gap-x-4 gap-y-2" role="group" aria-label="Date range">
+        {options.map((option) => (
+          <button
+            key={option.label}
+            type="button"
             className={cn(
-              "inline-flex size-3 items-center justify-center text-muted-foreground transition-colors duration-300 ease-out group-hover:text-accent",
-              isExpanded && "text-accent"
+              "whitespace-nowrap transition-colors duration-150 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
+              option.label === selectedLabel ? "text-foreground" : "text-muted-foreground/60"
             )}
-            aria-hidden="true"
+            aria-pressed={option.label === selectedLabel}
+            onClick={() => onSelect(option.label)}
           >
-            {isExpanded ? <X className="size-3" strokeWidth={2} /> : <Plus className="size-3" strokeWidth={2} />}
-          </span>
-        </button>
-        <div
-          className={cn(
-            "flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden transition-[max-height,max-width,opacity,transform] duration-500 ease-out md:h-4 md:flex-nowrap md:pl-4",
-            isExpanded
-              ? "mt-2 max-h-24 max-w-[84vw] basis-full translate-x-0 opacity-100 md:mt-0 md:max-h-4 md:max-w-[60vw] md:basis-auto"
-              : "pointer-events-none max-h-0 max-w-0 basis-0 -translate-x-1 opacity-0 md:basis-auto"
-          )}
-          aria-hidden={!isExpanded}
-        >
-          {visibleOptions.map((option) => (
-            <button
-              key={option.label}
-              type="button"
-              className="whitespace-nowrap text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-              aria-pressed="false"
-              tabIndex={isExpanded ? undefined : -1}
-              onClick={() => handleSelect(option.label)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+            {option.label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -439,10 +428,14 @@ function DateRangeFilter({
 
 function WeeklyTotalBars({
   weeks,
+  rangeScaleSeconds,
   animateOnMount,
+  scaleToViewport,
 }: {
   weeks: WeeklyActivityTotal[];
+  rangeScaleSeconds: number;
   animateOnMount: boolean;
+  scaleToViewport: boolean;
 }) {
   const [tooltip, setTooltip] = useState<WeeklyTooltipState | null>(null);
   const barsRef = useRef<HTMLDivElement>(null);
@@ -473,6 +466,81 @@ function WeeklyTotalBars({
     };
   }, []);
 
+  useEffect(() => {
+    if (!scaleToViewport) return;
+
+    const barsEl = barsRef.current;
+    const scroller = barsEl?.closest<HTMLElement>("[data-cadence-scroller]");
+    if (!barsEl || !scroller) return;
+
+    const barElements = Array.from(barsEl.querySelectorAll(":scope > button"), (button) =>
+      button.querySelector<SVGSVGElement>("[data-weekly-bar]")
+    );
+    const guideLabels = scroller.querySelectorAll<HTMLElement>("[data-weekly-guide-label]");
+    const appliedScaleSeconds = new Array<number>(weeks.length).fill(-1);
+    let displayedGuideScale = -1;
+    let frame: number | null = null;
+
+    const updateVisibleMax = () => {
+      const barsRect = barsEl.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const scrollerStyle = getComputedStyle(scroller);
+      const labelColumn = barsEl.parentElement?.previousElementSibling;
+      const labelWidth = labelColumn
+        ? labelColumn.getBoundingClientRect().width + parseFloat(getComputedStyle(labelColumn).marginRight)
+        : 0;
+      const visibleLeft = scrollerRect.left + parseFloat(scrollerStyle.paddingLeft) + labelWidth;
+      const visibleRight = scrollerRect.right - parseFloat(scrollerStyle.paddingRight);
+      const columnWidth = heroCellSize + heroCellGap;
+      const firstWeek = Math.max(0, Math.floor((visibleLeft - barsRect.left) / columnWidth));
+      const lastWeek = Math.min(
+        weeks.length - 1,
+        Math.floor((visibleRight - barsRect.left - 1) / columnWidth)
+      );
+
+      if (firstWeek > lastWeek) return;
+
+      let max = 0;
+      for (let index = firstWeek; index <= lastWeek; index += 1) {
+        max = Math.max(max, weeks[index].totalSeconds);
+      }
+      const scaleSeconds = getWeeklyScaleSeconds(max);
+
+      if (displayedGuideScale !== scaleSeconds) {
+        guideLabels.forEach((label, index) => {
+          label.textContent = formatGuideHours(scaleSeconds * weeklyGuideFractions[index]);
+        });
+        displayedGuideScale = scaleSeconds;
+      }
+
+      for (let index = Math.max(0, firstWeek - 1); index <= Math.min(weeks.length - 1, lastWeek + 1); index += 1) {
+        if (appliedScaleSeconds[index] === scaleSeconds) continue;
+        const bar = barElements[index];
+        if (bar) bar.style.height = `${getWeeklyBarHeight(weeks[index].totalSeconds, scaleSeconds)}px`;
+        appliedScaleSeconds[index] = scaleSeconds;
+      }
+    };
+
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        updateVisibleMax();
+      });
+    };
+
+    updateVisibleMax();
+    scroller.addEventListener("scroll", scheduleUpdate, { passive: true });
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
+    resizeObserver.observe(scroller);
+
+    return () => {
+      scroller.removeEventListener("scroll", scheduleUpdate);
+      resizeObserver.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [scaleToViewport, weeks]);
+
   return (
     <div
       ref={barsRef}
@@ -493,23 +561,18 @@ function WeeklyTotalBars({
         setTooltip(null);
       }}
     >
-      {weeklyGuideHours.map((hours) => (
+      {weeklyGuideFractions.filter((fraction) => fraction > 0).map((fraction) => (
         <div
-          key={hours}
+          key={fraction}
           className="pointer-events-none absolute left-0 right-0 border-t border-dashed border-muted-foreground/20"
-          style={{
-            top: (hours / 20) * weeklyBarHeight,
-          }}
+          style={{ top: weeklyBarHeight - fraction * weeklyPlotHeight }}
           aria-hidden="true"
         />
       ))}
-
       {weeks.map((week) => {
-        const hours = week.totalSeconds / 3600;
-        const totalHeight =
-          hours > 0
-            ? Math.min(Math.max((hours / 20) * weeklyBarHeight, 8), weeklyBarHeight)
-            : 0;
+        const totalHeight = getWeeklyBarHeight(week.totalSeconds, rangeScaleSeconds);
+        const runPercent = week.totalSeconds > 0 ? (week.runSeconds / week.totalSeconds) * 100 : 0;
+        const rideHeight = 100 - runPercent;
 
         return (
           <button
@@ -523,7 +586,7 @@ function WeeklyTotalBars({
           >
             {totalHeight > 0 ? (
               <motion.span
-                className="block w-[18px]"
+                className="relative block w-[18px]"
                 style={{ height: weeklyBarHeight }}
                 initial={animateOnMount ? { opacity: 0, y: 3 } : false}
                 animate={{ opacity: 1, y: 0 }}
@@ -534,20 +597,16 @@ function WeeklyTotalBars({
                 }}
               >
                 <svg
-                  className="w-[18px] overflow-visible text-muted-foreground/30 opacity-65 transition-[color,opacity] duration-150 group-hover:text-muted-foreground/80 group-hover:opacity-100 group-focus-visible:text-muted-foreground/80 group-focus-visible:opacity-100"
-                  style={{ height: weeklyBarHeight }}
-                  viewBox={`0 0 ${heroCellSize} ${weeklyBarHeight}`}
+                  data-weekly-bar
+                  className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 transition-[height,filter] duration-150 ease-out group-hover:brightness-125 group-focus-visible:brightness-125"
+                  style={{ width: weeklyBarWidth, height: totalHeight }}
+                  viewBox={`0 0 ${weeklyBarWidth} 100`}
+                  preserveAspectRatio="none"
+                  shapeRendering="crispEdges"
                   aria-hidden="true"
                 >
-                  <line
-                    x1={heroCellSize / 2}
-                    x2={heroCellSize / 2}
-                    y1={weeklyBarStrokeWidth / 2}
-                    y2={Math.max(totalHeight - weeklyBarStrokeWidth / 2, weeklyBarStrokeWidth / 2)}
-                    stroke="currentColor"
-                    strokeWidth={weeklyBarStrokeWidth}
-                    strokeLinecap="round"
-                  />
+                  <rect x="0" y="0" width={weeklyBarWidth} height={rideHeight} fill="var(--weekly-ride)" />
+                  <rect x="0" y={rideHeight} width={weeklyBarWidth} height={runPercent} fill="var(--weekly-run)" />
                 </svg>
               </motion.span>
             ) : null}
@@ -592,7 +651,7 @@ export function ActivityGrid({
       new Map(
         cells.map((cell) => [
           cell.date,
-          `${formatDate(cell.date)}: ${formatMovingTime(cell.movingTimeSeconds)}`,
+          `${formatDate(cell.date)}: ${formatActivityCellSummary(cell)}`,
         ])
       ),
     [cells]
@@ -694,6 +753,8 @@ export function ActivityGrid({
 }
 
 function ActivityTooltip({ tooltip }: { tooltip: TooltipState }) {
+  const items = getActivityCellTooltipItems(tooltip.cell);
+
   return createPortal(
     <div
       className="pointer-events-none fixed z-[100] -translate-x-1/2 -translate-y-[calc(100%+8px)] whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-center font-mono text-[12px] text-popover-foreground shadow-2xl shadow-black/40"
@@ -703,7 +764,10 @@ function ActivityTooltip({ tooltip }: { tooltip: TooltipState }) {
       }}
     >
       <div className="font-medium">{formatDate(tooltip.cell.date)}</div>
-      <div className="text-muted-foreground">{formatCompactMovingTime(tooltip.cell.movingTimeSeconds)}</div>
+      {items.map((item) => (
+        <div key={item.label} className="text-muted-foreground">{item.label} {item.value}</div>
+      ))}
+      {items.length === 0 ? <div className="text-muted-foreground">0 min</div> : null}
     </div>,
     document.body
   );
@@ -718,14 +782,6 @@ export function formatMovingTime(seconds: number) {
   if (hours === 0) return `${minutes} min`;
   if (minutes === 0) return `${hours} hr`;
   return `${hours} hr ${minutes} min`;
-}
-
-function formatCompactMovingTime(seconds: number) {
-  const totalMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  return `${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m`;
 }
 
 function formatTooltipMovingTime(seconds: number) {
@@ -788,6 +844,20 @@ function getWeeklyActivityTooltipItems(week: WeeklyActivityTotal) {
     { label: "run", value: formatTooltipMovingTime(week.runSeconds), seconds: week.runSeconds },
     { label: "ride", value: formatTooltipMovingTime(week.rideSeconds), seconds: week.rideSeconds },
   ].filter((item) => item.seconds > 0);
+}
+
+function getActivityCellTooltipItems(cell: ActivityCell) {
+  return [
+    { label: "run", value: formatTooltipMovingTime(cell.runSeconds), seconds: cell.runSeconds },
+    { label: "ride", value: formatTooltipMovingTime(cell.rideSeconds), seconds: cell.rideSeconds },
+  ].filter((item) => item.seconds > 0);
+}
+
+function formatActivityCellSummary(cell: ActivityCell) {
+  const items = getActivityCellTooltipItems(cell);
+  return items.length > 0
+    ? items.map((item) => `${item.label} ${item.value}`).join(", ")
+    : formatMovingTime(cell.movingTimeSeconds);
 }
 
 function formatWeeklyActivitySummary(week: WeeklyActivityTotal) {
@@ -902,12 +972,16 @@ function buildActivityTotals(cells: ActivityCell[]): ActivityTotals {
       totals.runSeconds += cell.runSeconds;
       totals.rideSeconds += cell.rideSeconds;
       totals.elevationGainMeters += cell.elevationGainMeters;
+      totals.activities += cell.activityCount;
+      if (cell.activityCount > 0) totals.activeDays += 1;
       return totals;
     },
     {
       runSeconds: 0,
       rideSeconds: 0,
       elevationGainMeters: 0,
+      activities: 0,
+      activeDays: 0,
     }
   );
 }
